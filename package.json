@@ -1,14 +1,14 @@
 {
   "name": "siding-vision-api",
   "version": "1.0.0",
-  "description": "Backend that estimates siding/facade measurements from 4 house photos using the Anthropic API. Keeps the API key server-side.",
+  "description": "Backend that estimates siding/facade measurements from house photos using the Google Gemini API (free tier).",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.32.1",
+    "@google/generative-ai": "^0.21.0",
     "cors": "^2.8.5",
     "express": "^4.19.2",
     "multer": "^1.4.5-lts.1"
