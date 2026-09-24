@@ -1,3 +1,35 @@
+/**
+ * Siding Vision API — small backend for the "Калькулятор сайдинга" page.
+ *
+ * Accepts up to 4 house-facade photos + a reference wall height, sends them
+ * to Google Gemini (free-tier API) using YOUR OWN key (kept only here, in
+ * an environment variable, never sent to the browser), and returns a JSON
+ * estimate of wall sizes, openings and corners that the calculator page
+ * can drop straight into its inputs.
+ *
+ * ── Setup ──────────────────────────────────────────────────────────────
+ * 1. npm install
+ * 2. Get a free key at https://aistudio.google.com/apikey (Google account,
+ *    no card required) and set it as GEMINI_API_KEY.
+ * 3. npm start   → listens on PORT (default 3000)
+ *
+ * ── Deploy (free tier) ────────────────────────────────────────────────
+ * Render.com:
+ *   - New "Web Service" → connect this folder/repo
+ *   - Build command: npm install
+ *   - Start command: npm start
+ *   - Environment → add GEMINI_API_KEY = AIza...
+ *
+ * Once deployed you'll have a URL like:
+ *   https://your-service.onrender.com
+ * Paste that into the calculator's "Свой сервер (API endpoint)" field —
+ * it POSTs to  <that URL>/estimate .
+ *
+ * ── CORS ───────────────────────────────────────────────────────────────
+ * The calculator page calls this directly from the browser, so CORS is
+ * left open (`cors()`). Tighten `origin` below if you want to restrict it.
+ */
+
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
@@ -12,10 +44,42 @@ if (!API_KEY) {
 }
 
 const genAI = new GoogleGenerativeAI(API_KEY);
-const MODEL_NAME = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+// Free-tier friendly, fast, supports vision. If the primary model is
+// overloaded (503) we retry it a few times, then fall back to the
+// secondary model below.
+const MODEL_NAME = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+const FALLBACK_MODEL_NAME = process.env.GEMINI_FALLBACK_MODEL || 'gemini-2.5-flash';
+
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+function isOverloaded(err) {
+  const msg = (err && err.message) || String(err);
+  return /503|overloaded|high demand/i.test(msg);
+}
+
+// Tries modelName up to `attempts` times (with short backoff) before
+// giving up; the caller decides what to do next (e.g. try a fallback model).
+async function generateWithRetry(modelName, parts, attempts) {
+  const model = genAI.getGenerativeModel({
+    model: modelName,
+    generationConfig: { responseMimeType: 'application/json' },
+  });
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await model.generateContent(parts);
+    } catch (err) {
+      lastErr = err;
+      if (!isOverloaded(err) || i === attempts - 1) throw err;
+      await sleep(1200 * (i + 1)); // 1.2s, 2.4s, ...
+    }
+  }
+  throw lastErr;
+}
+
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 15 * 1024 * 1024, files: 4 },
+  limits: { fileSize: 15 * 1024 * 1024, files: 4 }, // 15MB/photo, up to 4 photos
 });
 
 const app = express();
@@ -49,11 +113,6 @@ app.post('/estimate', upload.array('photos', 4), async (req, res) => {
       '"openings":[{"label":"Окна","qty":0,"w":0,"h":0},{"label":"Двери","qty":0,"w":0,"h":0}],' +
       '"outerCorners":4,"innerCorners":0,"notes":"коротко, что предположено"}';
 
-    const model = genAI.getGenerativeModel({
-      model: MODEL_NAME,
-      generationConfig: { responseMimeType: 'application/json' },
-    });
-
     const parts = [{ text: promptText }];
     for (const f of files) {
       parts.push({
@@ -64,7 +123,17 @@ app.post('/estimate', upload.array('photos', 4), async (req, res) => {
       });
     }
 
-    const result = await model.generateContent(parts);
+    let result;
+    try {
+      result = await generateWithRetry(MODEL_NAME, parts, 3);
+    } catch (err) {
+      if (isOverloaded(err)) {
+        // Primary model still overloaded after retries — try the fallback.
+        result = await generateWithRetry(FALLBACK_MODEL_NAME, parts, 2);
+      } else {
+        throw err;
+      }
+    }
     const raw = result.response.text().trim();
 
     let data;
@@ -79,7 +148,10 @@ app.post('/estimate', upload.array('photos', 4), async (req, res) => {
     res.json(data);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'upstream_error', message: err.message || String(err) });
+    const message = isOverloaded(err)
+      ? 'Сервис распознавания фото сейчас перегружен у Google (это временно). Подождите минуту и попробуйте ещё раз, либо введите размеры вручную.'
+      : (err.message || String(err));
+    res.status(500).json({ error: 'upstream_error', message });
   }
 });
 
