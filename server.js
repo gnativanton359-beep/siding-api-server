@@ -12,8 +12,7 @@ if (!API_KEY) {
 }
 
 const genAI = new GoogleGenerativeAI(API_KEY);
-const MODEL_NAME = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
-
+const MODEL_NAME = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 15 * 1024 * 1024, files: 4 },
