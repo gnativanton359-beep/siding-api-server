@@ -63,6 +63,10 @@ function isRetiredModel(err) {
   const msg = (err && err.message) || String(err);
   return /404|no longer available|not found/i.test(msg);
 }
+function isQuotaExceeded(err) {
+  const msg = (err && err.message) || String(err);
+  return /429|quota|RESOURCE_EXHAUSTED/i.test(msg);
+}
 
 // Tries modelName up to `attempts` times (with short backoff) before
 // giving up; the caller decides what to do next (e.g. try a fallback model).
@@ -138,8 +142,9 @@ app.post('/estimate', upload.array('photos', 4), async (req, res) => {
         break;
       } catch (err) {
         lastErr = err;
-        // Overloaded or retired — try the next model in the list.
-        if (!isOverloaded(err) && !isRetiredModel(err)) throw err;
+        // Overloaded, retired, or its free-tier daily quota is used up —
+        // each model has its OWN quota, so try the next one in the list.
+        if (!isOverloaded(err) && !isRetiredModel(err) && !isQuotaExceeded(err)) throw err;
       }
     }
     if (!result) throw lastErr || new Error('No Gemini model in GEMINI_MODELS worked.');
@@ -157,7 +162,9 @@ app.post('/estimate', upload.array('photos', 4), async (req, res) => {
     res.json(data);
   } catch (err) {
     console.error(err);
-    const message = isOverloaded(err)
+    const message = isQuotaExceeded(err)
+      ? 'Бесплатный дневной лимит запросов к Google Gemini исчерпан (у всех моделей). Попробуйте завтра, либо введите размеры вручную прямо сейчас.'
+      : isOverloaded(err)
       ? 'Сервис распознавания фото сейчас перегружен у Google (это временно). Подождите минуту и попробуйте ещё раз, либо введите размеры вручную.'
       : (err.message || String(err));
     res.status(500).json({ error: 'upstream_error', message });
