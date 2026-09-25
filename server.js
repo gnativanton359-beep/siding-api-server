@@ -49,7 +49,7 @@ const genAI = new GoogleGenerativeAI(API_KEY);
 // a few times (for temporary overload), and if it's overloaded OR has been
 // retired (404 "no longer available"), move on to the next candidate.
 // You can override the whole list via GEMINI_MODELS="a,b,c" as an env var.
-const MODEL_CANDIDATES = (process.env.GEMINI_MODELS || 'gemini-3.6-flash,gemini-3.8-flash,gemini-2.5-flash,gemini-2.0-flash')
+const MODEL_CANDIDATES = (process.env.GEMINI_MODELS || 'gemini-flash-latest,gemini-3.6-flash,gemini-3.8-flash,gemini-2.5-flash')
   .split(',').map(function (s) { return s.trim(); }).filter(Boolean);
 const MODEL_NAME = MODEL_CANDIDATES[0]; // used only for the /health label
 
