@@ -44,17 +44,24 @@ if (!API_KEY) {
 }
 
 const genAI = new GoogleGenerativeAI(API_KEY);
-// Free-tier friendly, fast, supports vision. If the primary model is
-// overloaded (503) we retry it a few times, then fall back to the
-// secondary model below.
-const MODEL_NAME = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
-const FALLBACK_MODEL_NAME = process.env.GEMINI_FALLBACK_MODEL || 'gemini-2.5-flash';
+// Google renames/retires Gemini model IDs fairly often. Rather than hard-code
+// one name, we keep an ordered list and walk down it: retry the first model
+// a few times (for temporary overload), and if it's overloaded OR has been
+// retired (404 "no longer available"), move on to the next candidate.
+// You can override the whole list via GEMINI_MODELS="a,b,c" as an env var.
+const MODEL_CANDIDATES = (process.env.GEMINI_MODELS || 'gemini-3.6-flash,gemini-3.8-flash,gemini-2.5-flash,gemini-2.0-flash')
+  .split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+const MODEL_NAME = MODEL_CANDIDATES[0]; // used only for the /health label
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 function isOverloaded(err) {
   const msg = (err && err.message) || String(err);
   return /503|overloaded|high demand/i.test(msg);
+}
+function isRetiredModel(err) {
+  const msg = (err && err.message) || String(err);
+  return /404|no longer available|not found/i.test(msg);
 }
 
 // Tries modelName up to `attempts` times (with short backoff) before
@@ -123,17 +130,19 @@ app.post('/estimate', upload.array('photos', 4), async (req, res) => {
       });
     }
 
-    let result;
-    try {
-      result = await generateWithRetry(MODEL_NAME, parts, 3);
-    } catch (err) {
-      if (isOverloaded(err)) {
-        // Primary model still overloaded after retries — try the fallback.
-        result = await generateWithRetry(FALLBACK_MODEL_NAME, parts, 2);
-      } else {
-        throw err;
+    let result, lastErr;
+    for (let m = 0; m < MODEL_CANDIDATES.length; m++) {
+      const modelName = MODEL_CANDIDATES[m];
+      try {
+        result = await generateWithRetry(modelName, parts, m === 0 ? 3 : 2);
+        break;
+      } catch (err) {
+        lastErr = err;
+        // Overloaded or retired — try the next model in the list.
+        if (!isOverloaded(err) && !isRetiredModel(err)) throw err;
       }
     }
+    if (!result) throw lastErr || new Error('No Gemini model in GEMINI_MODELS worked.');
     const raw = result.response.text().trim();
 
     let data;
